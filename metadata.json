@@ -1,0 +1,6 @@
+{
+  "name": "ENKAI LODGEFLOW",
+  "description": "AI-Powered Lodge Management & CCTV Room Entry, Exit, and Occupancy Intelligence System.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

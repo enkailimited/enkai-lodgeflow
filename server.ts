@@ -13,6 +13,10 @@ import {
   validateAndNormalizeGeminiOutput,
 } from './src/engine/occupancyEngine';
 import { DoorwayConfig, FullAnalysisResult } from './src/types/lodgeflow';
+import { isDatabaseConfigured } from './server/db/pool';
+import { createRoomsRouter } from './server/routes/rooms';
+import { createRoomCategoriesRouter } from './server/routes/roomCategories';
+import { createRoomImportRouter } from './server/routes/roomImport';
 
 const PORT = 3000;
 const GEMINI_FREE_TIER_MODEL = 'gemini-3.1-flash-lite';
@@ -659,7 +663,20 @@ function classifyAnalysisError(err: unknown): {
 
 async function startServer() {
   const app = express();
+
+  // Room endpoints reject oversized payloads early. Because body-parser marks
+  // the request as parsed, the global 15 MB parser below will skip these.
+  app.use(
+    ['/api/rooms', '/api/room-categories'],
+    express.json({ limit: '64kb' })
+  );
+  app.use('/api/room-import', express.json({ limit: '2mb' }));
   app.use(express.json({ limit: '15mb' }));
+
+  // GATE 2.0 — room inventory (PostgreSQL-backed)
+  app.use('/api/rooms', createRoomsRouter());
+  app.use('/api/room-categories', createRoomCategoriesRouter());
+  app.use('/api/room-import', createRoomImportRouter());
 
   // Health & Model Capability Endpoint
   app.get('/api/health', (_req: Request, res: Response) => {
@@ -669,8 +686,9 @@ async function startServer() {
     res.json({
       status: 'ok',
       application: 'ENKAI LODGEFLOW',
-      phase: 'Phase 0: Gemini Video Analysis Prototype',
+      phase: 'Phase 2 — Gate 2.0: Room server migration',
       gemini_configured: hasKey,
+      database_configured: isDatabaseConfigured(),
       model: GEMINI_FREE_TIER_MODEL,
       free_tier_compatible: true,
       supported_formats: ['MP4', 'MOV', 'WEBM', 'AVI', 'MPEG', '3GPP'],

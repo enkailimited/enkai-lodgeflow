@@ -26,6 +26,7 @@ import { Modal } from '../ui/Modal';
 
 export type AppRouteId =
   | 'dashboard'
+  | 'rooms'
   | 'monitoring'
   | 'analysis'
   | 'activity'
@@ -44,6 +45,7 @@ export interface NavItemSpec {
 
 export const APP_NAV_ITEMS: NavItemSpec[] = [
   { id: 'dashboard', label: 'Dashboard', icon: <Home className="w-4 h-4" /> },
+  { id: 'rooms', label: 'Room Management', icon: <BedDouble className="w-4 h-4" /> },
   { id: 'monitoring', label: 'CCTV Monitoring', icon: <Video className="w-4 h-4" /> },
   { id: 'analysis', label: 'Video Analysis', icon: <PlayCircle className="w-4 h-4" /> },
   { id: 'activity', label: 'Room Activity', icon: <BedDouble className="w-4 h-4" /> },
@@ -130,8 +132,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   }, []);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
-  const activeNavSpec =
-    APP_NAV_ITEMS.find((i) => i.id === activeRoute) || APP_NAV_ITEMS[0];
 
   const handleNavClick = (route: AppRouteId) => {
     onNavigate(route);
@@ -139,15 +139,15 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-[#F5F8FD] text-[#152B4A] flex flex-col lg:flex-row">
+    <div className="h-dvh max-h-dvh bg-[#F5F8FD] text-[#152B4A] flex flex-col lg:flex-row overflow-hidden">
       {/* Desktop Fixed Navy Sidebar */}
       <aside
-        className={`hidden lg:flex flex-col justify-between shrink-0 bg-gradient-to-b from-[#082B59] to-[#061F43] text-white border-r border-[#082B59] transition-all duration-200 select-none sticky top-0 h-screen z-30 ${
+        className={`hidden lg:flex flex-col justify-between shrink-0 bg-gradient-to-b from-[#082B59] to-[#061F43] text-white border-r border-[#082B59] transition-all duration-200 select-none h-full z-30 ${
           sidebarCollapsed ? 'w-[78px]' : 'w-[252px]'
         }`}
       >
         {/* Top Brand + Collapse Control */}
-        <div className="p-4 space-y-5">
+        <div className="p-4 space-y-5 overflow-y-auto min-h-0 grow">
           <div className="flex items-center justify-between gap-2">
             <div
               onClick={() => handleNavClick('dashboard')}
@@ -205,7 +205,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
         </div>
 
         {/* Bottom System Connection Status + User Profile + Collapse Button */}
-        <div className="p-3.5 space-y-2.5 border-t border-white/10">
+        <div className="p-3.5 space-y-2.5 border-t border-white/10 shrink-0">
           {!sidebarCollapsed ? (
             <ConnectionStatus
               online={systemOnline}
@@ -350,11 +350,11 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
       )}
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full">
         {/* Reusable Top Navigation Header (Matches Reference Image) */}
-        <header className="sticky top-0 z-20 bg-[#F5F8FD]/95 backdrop-blur-xs border-b border-[#E1EAF5] px-4 sm:px-6 py-3">
+        <header className="shrink-0 z-20 bg-[#F5F8FD]/95 backdrop-blur-xs border-b border-[#E1EAF5] px-4 sm:px-6 py-3">
           <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-3">
-            {/* Left: Mobile Drawer Trigger + Brand Title & Subtitle */}
+            {/* Left: Mobile Drawer Trigger */}
             <div className="flex items-center gap-3 min-w-0">
               <Button
                 variant="outline"
@@ -364,29 +364,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
                 icon={<Menu className="w-4 h-4 text-[#082B59]" />}
                 title="Open navigation drawer"
               />
-
-              <div className="hidden sm:flex w-10 h-10 rounded-xl bg-white border border-[#E1EAF5] items-center justify-center shrink-0 shadow-2xs p-1">
-                <img
-                  src="/assets/enkai-logo-mark.png"
-                  alt="ENKAI"
-                  className="w-full h-full object-contain"
-                />
-              </div>
-
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-base sm:text-xl font-extrabold text-[#082B59] tracking-tight truncate">
-                    ENKAI LODGEFLOW
-                  </span>
-                  <span className="hidden md:inline-block text-xs text-[#718096]">/</span>
-                  <span className="hidden md:inline-block text-xs font-bold text-[#1769E8] bg-[#EAF3FF] px-2.5 py-0.5 rounded-full">
-                    {activeNavSpec.label}
-                  </span>
-                </div>
-                <p className="text-[11px] sm:text-xs text-[#718096] truncate">
-                  AI-Powered Lodge Management &amp; CCTV Intelligence
-                </p>
-              </div>
             </div>
 
             {/* Right: Branch Selector, Notifications, Dar es Salaam Clock, Profile */}
@@ -487,13 +464,15 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           </div>
         </header>
 
-        {/* Page Content Container */}
-        <main className="flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-6 py-5 space-y-6">
-          {children}
+        {/* Page Content Container (only this region scrolls) */}
+        <main className="flex-1 min-h-0 overflow-y-auto w-full">
+          <div className="w-full max-w-[1440px] mx-auto px-4 sm:px-6 py-5 space-y-6">
+            {children}
+          </div>
         </main>
 
         {/* Enterprise Footer */}
-        <footer className="border-t border-[#E1EAF5] bg-white px-4 sm:px-6 py-3.5 mt-auto">
+        <footer className="shrink-0 border-t border-[#E1EAF5] bg-white px-4 sm:px-6 py-3.5">
           <div className="max-w-[1440px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-[#718096]">
             <div className="flex items-center gap-2">
               <span className="font-bold text-[#082B59]">ENKAI LODGEFLOW</span>

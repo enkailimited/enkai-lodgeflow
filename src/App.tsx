@@ -63,6 +63,8 @@ import {
   SampleScenarioId,
 } from './utils/sampleCctvGenerator';
 import { AccuracyValidationPanel } from './components/AccuracyValidationPanel';
+import { RoomManagementPage } from './components/rooms/RoomManagementPage';
+import { useRoomInventory } from './data/roomInventoryStore';
 import {
   AppLayout,
   AppRouteId,
@@ -311,6 +313,8 @@ export default function App() {
   // Lodge room & camera registry state
   const [lodgeRooms, setLodgeRooms] = useState<LodgeRoomSummary[]>(INITIAL_ROOMS);
   const [cameras] = useState<RegisteredCameraInfo[]>(INITIAL_CAMERAS);
+  // PHASE 1 inventory, now served by PostgreSQL via the room API
+  const roomInventory = useRoomInventory();
   const [selectedMonitoringCorridor, setSelectedMonitoringCorridor] =
     useState<string>('ALL');
   const [cameraDetailModal, setCameraDetailModal] =
@@ -1053,23 +1057,49 @@ export default function App() {
     });
   };
 
-  // Real operational metrics derived from lodgeRooms & analysisResult (Never invented!)
-  const totalRoomsCount = lodgeRooms.length;
-  const occupiedRoomsCount = lodgeRooms.filter(
-    (r) =>
-      r.lifecycleState === 'OCCUPIED' ||
-      r.lifecycleState === 'CHECKED_IN' ||
-      r.lifecycleState === 'TEMPORARILY_VACANT'
-  ).length;
-  const availableRoomsCount = lodgeRooms.filter(
-    (r) => r.lifecycleState === 'AVAILABLE'
-  ).length;
-  const reservedRoomsCount = lodgeRooms.filter(
-    (r) => r.lifecycleState === 'RESERVED'
-  ).length;
-  const cleaningRoomsCount = lodgeRooms.filter(
-    (r) => r.lifecycleState === 'CLEANING' || r.lifecycleState === 'HANDED_OVER'
-  ).length;
+  // Operational room metrics. Room inventory figures come from PostgreSQL via
+  // the room API. The legacy CCTV room summary is only a first-paint fallback
+  // while the server request is in flight; once it fails, KPIs show zero rather
+  // than silently presenting CCTV-derived numbers as inventory.
+  const roomInventoryReady = roomInventory.status === 'ready';
+  const roomInventoryLoading = roomInventory.status === 'loading';
+  const totalRoomsCount = roomInventoryReady
+    ? roomInventory.rooms.length
+    : roomInventoryLoading
+    ? lodgeRooms.length
+    : 0;
+  const occupiedRoomsCount = roomInventoryReady
+    ? roomInventory.rooms.filter((r) => r.status === 'OCCUPIED').length
+    : roomInventoryLoading
+    ? lodgeRooms.filter(
+        (r) =>
+          r.lifecycleState === 'OCCUPIED' ||
+          r.lifecycleState === 'CHECKED_IN' ||
+          r.lifecycleState === 'TEMPORARILY_VACANT'
+      ).length
+    : 0;
+  const availableRoomsCount = roomInventoryReady
+    ? roomInventory.rooms.filter((r) => r.status === 'AVAILABLE').length
+    : roomInventoryLoading
+    ? lodgeRooms.filter((r) => r.lifecycleState === 'AVAILABLE').length
+    : 0;
+  const reservedRoomsCount = roomInventoryReady
+    ? roomInventory.rooms.filter((r) => r.status === 'RESERVED').length
+    : roomInventoryLoading
+    ? lodgeRooms.filter((r) => r.lifecycleState === 'RESERVED').length
+    : 0;
+  const cleaningRoomsCount = roomInventoryReady
+    ? roomInventory.rooms.filter((r) => r.status === 'CLEANING').length
+    : roomInventoryLoading
+    ? lodgeRooms.filter(
+        (r) => r.lifecycleState === 'CLEANING' || r.lifecycleState === 'HANDED_OVER'
+      ).length
+    : 0;
+  const floorCount = roomInventoryReady
+    ? new Set(roomInventory.rooms.map((r) => r.floor)).size
+    : roomInventoryLoading
+    ? 3
+    : 0;
   const currentRegisteredGuestsCount = lodgeRooms.reduce(
     (sum, r) => sum + r.registeredGuests,
     0
@@ -1188,10 +1218,10 @@ export default function App() {
             <StatCard
               label="Total Rooms"
               value={totalRoomsCount}
-              supportingText={`Across 3 Floors (${selectedBranch})`}
+              supportingText={`Across ${floorCount} Floors (${selectedBranch})`}
               icon={<BedDouble className="w-6 h-6" />}
               iconTone="blue"
-              onClick={() => setActiveRoute('admin')}
+              onClick={() => setActiveRoute('rooms')}
             />
 
             <StatCard
@@ -1202,7 +1232,7 @@ export default function App() {
               iconTone="green"
               ringPercentage={occupiedPct}
               ringColor="#12B981"
-              onClick={() => setActiveRoute('activity')}
+              onClick={() => setActiveRoute('rooms')}
             />
 
             <StatCard
@@ -1213,7 +1243,7 @@ export default function App() {
               iconTone="blue"
               ringPercentage={availablePct}
               ringColor="#1769E8"
-              onClick={() => setActiveRoute('handover')}
+              onClick={() => setActiveRoute('rooms')}
             />
 
             <StatCard
@@ -1273,200 +1303,9 @@ export default function App() {
 
           {/* Main Two-Column Dashboard Content (Matches Reference Image) */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* LEFT COLUMN (7 Cols): Live CCTV Preview + Room Lifecycle Status + Analysis Quality */}
+            {/* LEFT COLUMN (7 Cols): Room Lifecycle Status + Analysis Quality */}
             <div className="lg:col-span-7 space-y-6">
-              {/* 1. Live CCTV Preview Card with Navy Header */}
-              <div className="bg-white border border-[#E1EAF5] rounded-2xl shadow-2xs overflow-hidden">
-                <SectionHeader
-                  darkHeader
-                  title="Live CCTV Preview"
-                  icon={<Camera className="w-5 h-5 text-white" />}
-                  rightContent={
-                    <ConnectionStatus
-                      online={Boolean(videoPreviewUrl)}
-                      label={videoPreviewUrl ? 'Clip Loaded' : 'No Live Stream'}
-                    />
-                  }
-                />
-
-                <div className="p-3 bg-[#082B59]/5">
-                  {videoPreviewUrl ? (
-                    <div className="relative rounded-xl overflow-hidden bg-[#061F43] aspect-video border border-[#082B59]/20">
-                      <video
-                        ref={dashboardVideoRef}
-                        src={videoPreviewUrl}
-                        playsInline
-                        muted={isVideoMuted}
-                        onPlay={() => setIsVideoPlaying(true)}
-                        onPause={() => setIsVideoPlaying(false)}
-                        onLoadedMetadata={(e) => {
-                          const dur = e.currentTarget.duration;
-                          if (Number.isFinite(dur) && dur > 0) {
-                            setVideoDurationSec(Math.round(dur));
-                          }
-                        }}
-                        onTimeUpdate={(e) =>
-                          setCurrentVideoTime(e.currentTarget.currentTime)
-                        }
-                        className="w-full h-full object-contain"
-                      />
-
-                      {/* OSD Top-Left Timestamp Badge */}
-                      <div className="absolute top-3 left-3 bg-[#061F43]/80 backdrop-blur-xs text-white text-xs font-mono px-2.5 py-1 rounded-md border border-white/15 tabular-nums">
-                        {doorwayConfig.roomId} · Playhead:{' '}
-                        {formatSecondsToVideoTimestamp(currentVideoTime)}
-                      </div>
-
-                      {/* Doorway Threshold ROI Overlay */}
-                      {showDoorwayOverlay && (
-                        <div
-                          style={{
-                            left: `${doorwayConfig.thresholdZone.x}%`,
-                            top: `${doorwayConfig.thresholdZone.y}%`,
-                            width: `${doorwayConfig.thresholdZone.width}%`,
-                            height: `${doorwayConfig.thresholdZone.height}%`,
-                          }}
-                          className="pointer-events-none absolute border-2 border-[#12B981] bg-[#12B981]/15 flex flex-col justify-between p-1.5 rounded-xs"
-                        >
-                          <div className="bg-[#082B59]/90 text-white text-[10px] font-mono px-1.5 py-0.5 rounded-xs w-fit">
-                            {doorwayConfig.roomId} ROI
-                          </div>
-                          <div className="border-t-2 border-dashed border-[#3188F5] w-full text-center bg-[#082B59]/90 text-white text-[9px] font-mono py-0.5">
-                            THRESHOLD
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Bottom Overlay Camera Bar matching Reference Image */}
-                      <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-[#061F43]/95 via-[#061F43]/70 to-transparent px-4 pt-6 pb-3 flex flex-col gap-2">
-                        <div className="text-xs font-mono font-semibold text-white/90">
-                          {doorwayConfig.cameraId} · {selectedFile?.name}
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!dashboardVideoRef.current) return;
-                              if (dashboardVideoRef.current.paused) {
-                                dashboardVideoRef.current.play().catch(() => {});
-                              } else {
-                                dashboardVideoRef.current.pause();
-                              }
-                            }}
-                            className="text-white hover:text-[#3188F5] cursor-pointer"
-                            title={isVideoPlaying ? 'Pause' : 'Play'}
-                          >
-                            {isVideoPlaying ? (
-                              <Pause className="w-4 h-4" />
-                            ) : (
-                              <Play className="w-4 h-4 fill-current" />
-                            )}
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setIsVideoMuted((m) => !m)}
-                            className="text-white hover:text-[#3188F5] cursor-pointer"
-                            title={isVideoMuted ? 'Unmute' : 'Mute'}
-                          >
-                            {isVideoMuted ? (
-                              <VolumeX className="w-4 h-4" />
-                            ) : (
-                              <Volume2 className="w-4 h-4" />
-                            )}
-                          </button>
-
-                          {/* Scrubber bar */}
-                          <div
-                            onClick={(e) => {
-                              if (!dashboardVideoRef.current || !videoDurationSec)
-                                return;
-                              const rect = e.currentTarget.getBoundingClientRect();
-                              const ratio = Math.max(
-                                0,
-                                Math.min(1, (e.clientX - rect.left) / rect.width)
-                              );
-                              dashboardVideoRef.current.currentTime =
-                                ratio * videoDurationSec;
-                            }}
-                            className="flex-1 h-1.5 bg-white/25 rounded-full overflow-hidden cursor-pointer"
-                          >
-                            <div
-                              style={{
-                                width: `${
-                                  videoDurationSec > 0
-                                    ? Math.min(
-                                        100,
-                                        (currentVideoTime / videoDurationSec) * 100
-                                      )
-                                    : 0
-                                }%`,
-                              }}
-                              className="h-full bg-[#3188F5] rounded-full"
-                            />
-                          </div>
-
-                          <span className="text-[11px] font-mono font-bold text-white px-1.5 py-0.5 rounded bg-white/15">
-                            HD
-                          </span>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              dashboardVideoRef.current?.requestFullscreen?.()
-                            }
-                            className="text-white hover:text-[#3188F5] cursor-pointer"
-                            title="Fullscreen video"
-                          >
-                            <Maximize2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    /* Honest Disconnected / Empty State when no live stream or uploaded clip is active */
-                    <div className="rounded-xl bg-[#061F43] text-white aspect-video p-6 flex flex-col items-center justify-center text-center border border-[#082B59]">
-                      <div className="w-12 h-12 rounded-2xl bg-white/10 text-[#3188F5] flex items-center justify-center mb-3">
-                        <Video className="w-6 h-6" />
-                      </div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-white/10 text-[#3188F5]">
-                          {doorwayConfig.cameraId} · {doorwayConfig.roomId}
-                        </span>
-                      </div>
-                      <h3 className="text-sm sm:text-base font-bold text-white mt-1">
-                        No Live RTSP Stream Connected (Upload Evaluation Mode)
-                      </h3>
-                      <p className="text-xs text-white/70 max-w-md mt-1 leading-relaxed">
-                        Live RTSP camera streaming is disabled in Phase 0. Upload a corridor CCTV video clip (MP4, MOV, WebM) or generate a playable test clip to preview and analyze real doorway crossings.
-                      </p>
-                      <div className="flex flex-wrap items-center justify-center gap-2.5 mt-4">
-                        <Button
-                          variant="primary"
-                          size="md"
-                          icon={<Upload className="w-4 h-4" />}
-                          onClick={() => {
-                            setActiveRoute('analysis');
-                            setTimeout(() => fileInputRef.current?.click(), 80);
-                          }}
-                        >
-                          Upload CCTV Video
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          size="md"
-                          icon={<Play className="w-4 h-4" />}
-                          onClick={() => setActiveRoute('analysis')}
-                        >
-                          Open Video Analysis Studio
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* 2. Bottom-Left Row: Room Lifecycle Status + Analysis Quality */}
+              {/* Bottom-Left Row: Room Lifecycle Status + Analysis Quality */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Room Lifecycle Status Card */}
                 <div className="bg-white border border-[#E1EAF5] rounded-2xl p-5 shadow-2xs space-y-4">
@@ -1619,7 +1458,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* RIGHT COLUMN (5 Cols): Room Activity Trend + Recent Events + Analyze CCTV Video Action Card */}
+            {/* RIGHT COLUMN (5 Cols): Room Activity Trend + Recent Events */}
             <div className="lg:col-span-5 space-y-6">
               {/* 1. Room Activity Trend Card */}
               <ChartCard
@@ -1752,33 +1591,15 @@ export default function App() {
                   </div>
                 )}
               </div>
-
-              {/* 3. Prominent Blue Action Card: Analyze CCTV Video (Matches Reference Image) */}
-              <div
-                onClick={() => setActiveRoute('analysis')}
-                className="group cursor-pointer rounded-2xl bg-gradient-to-r from-[#1769E8] via-[#2478F0] to-[#3188F5] text-white p-5 shadow-md hover:shadow-lg transition-all flex items-center justify-between gap-4 border border-[#1769E8]"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-full bg-[#082B59] text-white flex items-center justify-center shrink-0 shadow-inner group-hover:scale-105 transition-transform">
-                    <Play className="w-6 h-6 fill-current ml-0.5" />
-                  </div>
-                  <div>
-                    <h3 className="text-base sm:text-lg font-extrabold text-white tracking-tight">
-                      Analyze CCTV Video
-                    </h3>
-                    <p className="text-xs sm:text-sm text-white/90 mt-0.5">
-                      Upload and analyze room activity with Gemini AI
-                    </p>
-                  </div>
-                </div>
-                <div className="w-10 h-10 rounded-full bg-[#082B59] text-white flex items-center justify-center shrink-0 group-hover:translate-x-0.5 transition-transform">
-                  <ChevronRight className="w-5 h-5" />
-                </div>
-              </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* =====================================================================
+          SCREEN: ROOM MANAGEMENT — PHASE 1 LODGE FOUNDATION
+         ===================================================================== */}
+      {activeRoute === 'rooms' && <RoomManagementPage />}
 
       {/* =====================================================================
           SCREEN 2: CCTV MONITORING

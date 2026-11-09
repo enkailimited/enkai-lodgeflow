@@ -1,0 +1,1032 @@
+# ENKAI LODGEFLOW — PHASE 12A
+# SIDEBAR ARCHITECTURE, PORTAL ALLOCATION & RBAC ALIGNMENT
+
+**Project:** ENKAI LODGEFLOW — Multi-Tenant Lodge Management & AI CCTV Intelligence Platform  
+**Phase:** 12A  
+**Priority:** High  
+**Objective:** Refactor and align the navigation architecture, portal responsibilities, route allocation, and role-based access control across all three ENKAI LODGEFLOW portals.
+
+---
+
+## 1. PRIMARY OBJECTIVE
+
+Implement a clean separation of responsibilities across the three operational portals:
+
+1. Lodge Management Portal — Tenant Business Management.
+2. Platform Management Portal — ENKAI Global Platform Administration.
+3. CCTV Edge Agent Portal — Local CCTV Infrastructure, Processing and Operations.
+
+The most important architectural requirement is:
+
+**Receptionists, cashiers, housekeeping staff and ordinary lodge employees must NOT have access to CCTV intelligence, CCTV evidence, revenue investigations or AI video analysis.**
+
+CCTV intelligence results must be delivered to authorized tenant management users through the central cloud backend, with strict tenant and branch filtering.
+
+All CCTV camera configuration, local video processing, door-zone configuration, evidence generation, local buffering and synchronization operations belong to the CCTV Edge Agent.
+
+The Platform Management Portal must provide ENKAI Super Administrators with comprehensive management capabilities across the entire SaaS platform.
+
+This phase is primarily a navigation, portal allocation, permissions and access-control refactoring task. Preserve existing business logic and working integrations.
+
+---
+
+## 2. MANDATORY PRE-IMPLEMENTATION AUDIT
+
+Before changing code, inspect the existing project.
+
+Identify:
+
+- Frontend application structure.
+- Existing portal layouts and sidebar components.
+- Route definitions and route guards.
+- Existing authentication and RBAC implementation.
+- User roles and permissions.
+- Tenant and branch context handling.
+- Existing CCTV Agent frontend and backend services.
+- CCTV camera and agent registration models.
+- Existing APIs for CCTV events, AI analysis and investigations.
+- Platform administration APIs.
+- Existing dashboards and business modules.
+- Existing navigation configuration and icon libraries.
+
+Inspect these reports where available:
+
+- `/reports/SIDEBAR_MENU_ARCHITECTURE_REPORT.md`
+- `/reports/PHASE_11_LIVE_INTEGRATION_REPORT.md`
+- `/reports/TENANT_ISOLATION_TESTS.md`
+- `/reports/CCTV_PMS_END_TO_END_TESTS.md`
+- `/reports/PRODUCTION_READINESS_AUDIT.md`
+
+Do not assume that a component, API or permission already exists just because it appears in a report.
+
+Inspect actual source code and verify implementation.
+
+Create:
+
+`/reports/PHASE_12A_PRE_IMPLEMENTATION_AUDIT.md`
+
+Document the current state, existing routes, permission gaps, duplicated components and proposed changes.
+
+Do not delete or replace existing functionality during the audit.
+
+---
+
+# 3. PORTAL A — LODGE MANAGEMENT PORTAL
+
+## 3.1 Purpose
+
+This portal is for lodge business operations and authorized tenant management.
+
+Target users:
+
+- Tenant Owner
+- General Manager
+- Branch Manager
+- Receptionist
+- Cashier
+- Housekeeping Supervisor
+- Housekeeping Staff
+- CCTV Management Officer
+- Other authorized lodge staff
+
+The portal must distinguish operational employees from management users.
+
+## 3.2 Sidebar Structure
+
+Organize the navigation into the following groups.
+
+### A. Overview
+
+1. Dashboard
+   - Route: `dashboard`
+   - Icon: `Home`
+   - Scope: Operational overview based on the user's permissions.
+
+### B. Front Desk & Guest Operations
+
+2. Reservations
+   - Route: `reservations`
+   - Icon: `Calendar`
+
+3. Guest Directory
+   - Route: `guests`
+   - Icon: `Users`
+
+4. Check-In / Out
+   - Route: `checkin`
+   - Icon: `CheckCircle2`
+
+5. Room Management
+   - Route: `rooms`
+   - Icon: `BedDouble`
+
+6. Housekeeping
+   - Route: `housekeeping`
+   - Icon: `Layers`
+
+### C. Finance & Cash Management
+
+7. Reception & Cashier
+   - Route: `reception`
+   - Icon: `CreditCard`
+
+8. Invoices & Billing
+   - Route: `billing`
+   - Icon: `Receipt`
+
+9. Lodge Expenses
+   - Route: `expenses`
+   - Icon: `FileSpreadsheet`
+
+### D. Business Management
+
+10. Staff Management
+    - Route: `staff`
+    - Icon: `User`
+
+11. Branch Management
+    - Route: `branches`
+    - Icon: `Building2`
+
+12. Business Reports & Analytics
+    - Route: `reports`
+    - Icon: `BarChart3`
+
+### E. CCTV & Security Intelligence
+
+This group is exclusively accessible to authorized management users.
+
+13. CCTV Intelligence Dashboard
+    - Route: `cctv-intelligence`
+    - Icon: `Video`
+
+14. CCTV Events & Alerts
+    - Route: `cctv-events`
+    - Icon: `BellRing`
+
+15. Revenue Investigation
+    - Route: `revenue-investigation`
+    - Icon: `AlertTriangle`
+
+16. Room Activity
+    - Route: `room-activity`
+    - Icon: `Activity`
+
+17. Event Timeline
+    - Route: `event-timeline`
+    - Icon: `Clock`
+
+18. CCTV Reports & Analytics
+    - Route: `cctv-reports`
+    - Icon: `ChartBar`
+
+IMPORTANT:
+
+Remove the following from the Lodge Management Portal's normal operational navigation:
+
+- CCTV Monitoring.
+- Video Analysis Studio.
+- Camera Configuration.
+- Door Zone Configuration.
+- Local CCTV Agent Management.
+- Local Event Queue Management.
+
+These functions belong to the CCTV Edge Agent.
+
+The Lodge Management Portal must consume verified CCTV intelligence results from the central backend. It must not directly connect to local camera RTSP streams or independently perform local camera processing.
+
+Authorized tenant management users may view permitted evidence clips through secure backend-mediated access.
+
+### F. Administration
+
+19. User & Role Management
+    - Route: `user-management`
+    - Icon: `ShieldCheck`
+
+20. Branch Administration
+    - Route: `branch-admin`
+    - Icon: `Settings`
+
+21. Business Settings
+    - Route: `settings`
+    - Icon: `Sliders`
+
+22. Audit Logs
+    - Route: `audit-logs`
+    - Icon: `ClipboardList`
+
+Avoid creating duplicate branches/settings pages if equivalent existing modules already exist. Reuse existing functional components and route implementations where appropriate.
+
+---
+
+# 4. TENANT CCTV INTELLIGENCE — BRANCH FILTERING
+
+This is one of the most important requirements.
+
+A tenant may operate multiple branches.
+
+Example:
+
+Tenant: ENKAI Lodge Group
+
+- Dar es Salaam Branch
+- Arusha Branch
+- Dodoma Branch
+
+Each branch may have:
+
+- Multiple buildings.
+- Multiple floors.
+- Multiple rooms.
+- Multiple IP cameras.
+- One or more CCTV Edge Agents.
+
+Tenant management must be able to view authorized CCTV intelligence across all its branches.
+
+## 4.1 CCTV Intelligence Dashboard
+
+Implement:
+
+- All Branches filter.
+- Individual Branch filter.
+- Date range filter.
+- Event type filter.
+- Room filter.
+- Event verification status filter.
+- Investigation status filter.
+
+Display:
+
+- Total detected entries.
+- Total detected exits.
+- Unmatched entries.
+- Entries matched with active GuestStay.
+- Entries requiring review.
+- Confirmed unauthorized access, where human-reviewed.
+- Potential unrecorded revenue cases.
+- Agent connectivity status.
+- Camera health summaries.
+
+All dashboard metrics must come from actual backend data.
+
+Do not create fake production metrics or hardcoded statistics.
+
+## 4.2 Branch Filtering Rules
+
+For Tenant Owner and authorized General Manager:
+
+- Allow all authorized branches.
+- Provide an All Branches filter.
+- Allow drilling down into an individual branch.
+
+For Branch Manager:
+
+- Restrict access to assigned branches.
+- Do not expose other branches.
+
+For ordinary employees:
+
+- Do not expose CCTV intelligence.
+
+Enforce branch authorization in backend queries and APIs.
+
+Do not rely exclusively on frontend filters.
+
+Never trust a client-provided `tenantId` or `branchId` without validating it against the authenticated user's authorization context.
+
+## 4.3 CCTV Investigation
+
+Management users must be able to:
+
+- Open unmatched entry cases.
+- View room, branch and camera details.
+- Inspect evidence clips.
+- Review Gemini analysis.
+- Compare CCTV events with GuestStay and reservations.
+- Add investigation notes.
+- Classify cases as cleared, requiring review or confirmed unrecorded revenue.
+- Record who made each decision and when.
+
+An unmatched CCTV event must NOT automatically be classified as theft or confirmed lost revenue.
+
+Use statuses such as:
+
+- `MATCHED_STAY`
+- `MATCHED_RESERVATION`
+- `UNMATCHED_ENTRY`
+- `REVIEW_REQUIRED`
+- `CLEARED`
+- `CONFIRMED_UNAUTHORIZED_ACCESS`
+- `CONFIRMED_UNRECORDED_REVENUE`
+
+Only authorized human reviewers can confirm final investigation outcomes.
+
+CCTV events must never automatically create invoices, payments, check-ins, check-outs or modify financial records.
+
+---
+
+# 5. PORTAL A — ROLE-BASED ACCESS CONTROL
+
+Implement or align the following role model.
+
+| Role | Authorized access |
+|---|---|
+| Tenant Owner | All authorized tenant branches, business management and CCTV intelligence |
+| General Manager | Authorized business operations, reports and CCTV intelligence |
+| Branch Manager | Assigned branch operations and CCTV intelligence |
+| Receptionist | Reservations, guests, check-in/out and assigned room operations |
+| Cashier | Reception transactions, invoices and payments |
+| Housekeeping Supervisor | Housekeeping operations and assigned room status |
+| Housekeeping Staff | Assigned housekeeping tasks |
+| CCTV Management Officer | Tenant CCTV dashboards, alerts and investigations |
+| CCTV Technician | Agent administration only, subject to assigned permissions |
+
+Important:
+
+A CCTV Technician working on the local Edge Agent must not automatically receive access to tenant financial records or guest identification data.
+
+Use granular permissions rather than relying only on role names.
+
+Suggested permissions:
+
+- `dashboard.view`
+- `reservations.view`
+- `reservations.manage`
+- `guests.view`
+- `guests.manage`
+- `checkin.manage`
+- `rooms.view`
+- `rooms.manage`
+- `housekeeping.manage`
+- `billing.view`
+- `billing.manage`
+- `expenses.manage`
+- `staff.manage`
+- `reports.view`
+- `cctv.dashboard.view`
+- `cctv.events.view`
+- `cctv.evidence.view`
+- `cctv.investigation.manage`
+- `cctv.reports.view`
+- `branches.view`
+- `branches.manage`
+- `users.manage`
+- `settings.manage`
+- `audit.view`
+
+The exact naming may follow the existing permission conventions, but the separation must be preserved.
+
+---
+
+# 6. PORTAL B — CCTV EDGE AGENT
+
+## 6.1 Purpose
+
+The CCTV Edge Agent is an independently installed application running on the local computer/server in the lodge CCTV room.
+
+It is responsible for:
+
+- Connecting to IP cameras.
+- RTSP/ONVIF communication.
+- Local video processing.
+- Person detection and tracking.
+- Door-zone detection.
+- Room entry/exit event generation.
+- Evidence clip generation.
+- Local SQLite event buffering.
+- Offline synchronization.
+- Camera and agent diagnostics.
+
+It must remain operational when internet connectivity is unavailable, subject to local hardware and storage availability.
+
+## 6.2 Sidebar Structure
+
+### A. Overview
+
+1. Agent Dashboard
+   - Route: `agent-dashboard`
+   - Icon: `LayoutDashboard`
+
+2. Agent Node Configuration
+   - Route: `agent-config`
+   - Icon: `Cpu`
+
+### B. Camera Infrastructure
+
+3. IP Camera Registry
+   - Route: `agent-cameras`
+   - Icon: `Video`
+
+4. Live Camera Monitoring
+   - Route: `agent-monitoring`
+   - Icon: `MonitorPlay`
+
+5. Camera Diagnostics
+   - Route: `agent-diagnostics`
+   - Icon: `Activity`
+
+### C. Camera & Room Configuration
+
+6. Camera-to-Room Mapping
+   - Route: `agent-room-mapping`
+   - Icon: `Map`
+
+7. Door Zone Configuration
+   - Route: `agent-door-zones`
+   - Icon: `DoorOpen`
+
+8. Camera Coverage Configuration
+   - Route: `agent-coverage`
+   - Icon: `Scan`
+
+Support:
+
+- One camera covering multiple room doors.
+- Multiple cameras covering one corridor.
+- Multiple doors belonging to one room.
+- Branch/building/floor/room assignments.
+- Versioned door-zone configurations.
+
+### D. Local Video Intelligence
+
+9. Person Detection & Tracking
+   - Route: `agent-detection`
+   - Icon: `ScanEye`
+
+10. Local Event Detection
+    - Route: `agent-events`
+    - Icon: `Activity`
+
+11. Evidence Clip Management
+    - Route: `agent-evidence`
+    - Icon: `Film`
+
+12. Video Processing Queue
+    - Route: `agent-processing`
+    - Icon: `ListVideo`
+
+13. Local Event Timeline
+    - Route: `agent-timeline`
+    - Icon: `Clock`
+
+### E. Synchronization & Storage
+
+14. Local Event Queue
+    - Route: `agent-queue`
+    - Icon: `Database`
+
+15. Cloud Synchronization
+    - Route: `agent-sync`
+    - Icon: `CloudUpload`
+
+16. Storage Management
+    - Route: `agent-storage`
+    - Icon: `HardDrive`
+
+17. Failed Uploads & Retry
+    - Route: `agent-failures`
+    - Icon: `RefreshCw`
+
+### F. System Administration
+
+18. Agent Health & Performance
+    - Route: `agent-health`
+    - Icon: `Gauge`
+
+19. Agent Logs
+    - Route: `agent-logs`
+    - Icon: `FileText`
+
+20. Agent Settings
+    - Route: `agent-settings`
+    - Icon: `Settings`
+
+Do not create non-functional pages simply to populate the sidebar.
+
+If a module does not yet exist, mark it as planned or unavailable rather than showing fake operational data.
+
+## 6.3 Edge/Cloud AI Responsibility
+
+Maintain the actual hybrid architecture.
+
+CCTV Edge Agent:
+
+- RTSP/ONVIF camera connection.
+- Local frame acquisition.
+- Person detection/tracking.
+- Door-zone interaction detection.
+- Local entry/exit event generation.
+- Evidence clip creation.
+- Local buffering and synchronization.
+
+Central Cloud:
+
+- Event validation.
+- Evidence processing.
+- Gemini multimodal video analysis.
+- Structured analysis persistence.
+- PMS reconciliation.
+- Tenant management notifications.
+
+Do not label Gemini cloud processing as local edge processing unless a real local model implementation exists.
+
+Do not send continuous full video streams to Gemini.
+
+Use event-triggered clips and controlled upload policies.
+
+The Agent must retain local event data safely during network interruptions and synchronize using idempotent event identifiers.
+
+---
+
+# 7. PORTAL C — PLATFORM MANAGEMENT PORTAL
+
+## 7.1 Purpose
+
+This portal belongs to ENKAI platform administrators.
+
+It manages the complete SaaS platform and its resources.
+
+It is NOT the same as a tenant management portal.
+
+Tenant Owners and corporate lodge directors must not receive global Super Admin permissions.
+
+## 7.2 Sidebar Structure
+
+### A. Platform Overview
+
+1. Platform Dashboard
+   - Route: `platform-dashboard`
+   - Icon: `LayoutDashboard`
+
+2. Platform Health & Monitoring
+   - Route: `platform-health`
+   - Icon: `Activity`
+
+3. System Notifications
+   - Route: `platform-notifications`
+   - Icon: `Bell`
+
+### B. Tenant & Subscription Management
+
+4. Tenant Management
+   - Route: `platform-tenants`
+   - Icon: `Building2`
+
+5. Tenant Accounts
+   - Route: `platform-accounts`
+   - Icon: `Users`
+
+6. Subscription Plans
+   - Route: `platform-plans`
+   - Icon: `Layers`
+
+7. Subscription Management
+   - Route: `platform-subscriptions`
+   - Icon: `CreditCard`
+
+8. Billing & Payments
+   - Route: `platform-billing`
+   - Icon: `Receipt`
+
+9. Tenant Usage & Limits
+   - Route: `platform-usage`
+   - Icon: `Gauge`
+
+### C. Branch & Device Infrastructure
+
+10. Global Branch Directory
+    - Route: `platform-branches`
+    - Icon: `MapPin`
+
+11. CCTV Device Registry
+    - Route: `platform-devices`
+    - Icon: `Video`
+
+12. CCTV Agent Registry
+    - Route: `platform-agents`
+    - Icon: `Cpu`
+
+13. Agent Installation & Updates
+    - Route: `platform-agent-deployments`
+    - Icon: `Download`
+
+14. Device Health Monitoring
+    - Route: `platform-device-health`
+    - Icon: `Activity`
+
+15. Remote Configuration Management
+    - Route: `platform-agent-config`
+    - Icon: `Sliders`
+
+### D. AI & Resource Management
+
+16. AI Provider Configuration
+    - Route: `platform-ai-providers`
+    - Icon: `Brain`
+
+17. AI Model Management
+    - Route: `platform-ai-models`
+    - Icon: `Bot`
+
+18. AI Usage & Costs
+    - Route: `platform-ai-usage`
+    - Icon: `ChartBar`
+
+19. Storage Management
+    - Route: `platform-storage`
+    - Icon: `HardDrive`
+
+20. Bandwidth & Data Usage
+    - Route: `platform-bandwidth`
+    - Icon: `Network`
+
+21. API & Integrations
+    - Route: `platform-integrations`
+    - Icon: `Plug`
+
+### E. Security & Governance
+
+22. Super Admin Users & Roles
+    - Route: `platform-admin-users`
+    - Icon: `ShieldCheck`
+
+23. Platform Audit Logs
+    - Route: `platform-audit`
+    - Icon: `ClipboardList`
+
+24. Security Events
+    - Route: `platform-security`
+    - Icon: `ShieldAlert`
+
+25. Feature Flags
+    - Route: `platform-feature-flags`
+    - Icon: `Flag`
+
+### F. System Operations
+
+26. System Configuration
+    - Route: `platform-settings`
+    - Icon: `Settings`
+
+27. Backup & Disaster Recovery
+    - Route: `platform-backups`
+    - Icon: `DatabaseBackup`
+
+28. Platform Maintenance
+    - Route: `platform-maintenance`
+    - Icon: `Wrench`
+
+The Platform Management Portal must provide actual management capabilities, not merely dashboard placeholders.
+
+Where backend functionality is missing, document the gap and avoid claiming the feature is operational.
+
+## 7.3 Platform Super Admin Permissions
+
+Only explicitly authorized platform administrators can:
+
+- Create and activate tenants.
+- Suspend and reactivate tenant accounts.
+- Manage platform subscriptions.
+- Manage global CCTV devices and agents.
+- Manage AI provider configuration.
+- Manage global model fallback policies.
+- Review platform-wide AI costs.
+- Manage global storage quotas.
+- Manage platform security and audit logs.
+- Manage system-wide feature flags.
+- Perform authorized backup and maintenance operations.
+
+All sensitive actions must be audited.
+
+Use separate platform-level permissions such as:
+
+- `platform.dashboard.view`
+- `platform.tenants.manage`
+- `platform.branches.view`
+- `platform.subscriptions.manage`
+- `platform.devices.manage`
+- `platform.agents.manage`
+- `platform.ai.providers.manage`
+- `platform.ai.models.manage`
+- `platform.ai.usage.view`
+- `platform.storage.manage`
+- `platform.security.manage`
+- `platform.audit.view`
+- `platform.backups.manage`
+- `platform.settings.manage`
+
+Do not mix platform-level permissions with tenant-level permissions.
+
+---
+
+# 8. AUTHENTICATION, ROUTING & PORTAL SEPARATION
+
+Implement clean portal boundaries.
+
+Requirements:
+
+1. Each portal must have its own navigation configuration.
+2. Use unique route IDs and avoid collisions.
+3. Use portal-specific layouts and route guards.
+4. A user must not access another portal simply by manually typing a URL.
+5. Backend authorization must verify permissions independently of the frontend.
+6. Authentication must establish the user's actual tenant and branch scope.
+7. Platform administrators must use platform-level authorization.
+8. Tenant users must never inherit global platform permissions.
+9. CCTV Agent authentication must use secure agent identity/credentials, not ordinary employee credentials.
+10. Agent access must be limited to its registered tenant, branch and device scope.
+
+Use route namespaces where appropriate:
+
+- `/lodge/*`
+- `/platform/*`
+- `/agent/*`
+
+If the current application already uses another routing convention, preserve it where possible while guaranteeing collision-free routing and authorization.
+
+Do not introduce a second authentication system unnecessarily.
+
+---
+
+# 9. SIDEBAR UX & RESPONSIVE DESIGN
+
+Preserve the existing ENKAI LODGEFLOW Blue & White Enterprise Dashboard visual design.
+
+Implement:
+
+- Consistent sidebar hierarchy.
+- Clear section labels.
+- Appropriate Lucide icons.
+- Active route indicators.
+- Collapsible sidebar.
+- Responsive mobile navigation.
+- Permission-aware navigation.
+- Search/navigation discovery where useful.
+- User profile and portal identity.
+- Branch selector for authorized tenant users.
+- Clear agent node identity in the Agent Portal.
+- Clear platform identity in the Platform Portal.
+
+Do not display unauthorized menu items.
+
+Do not overload Reception users with management-only functionality.
+
+Use concise labels and avoid duplicated menu entries.
+
+The sidebar must reflect the actual permissions of the authenticated user.
+
+---
+
+# 10. BACKEND SECURITY REQUIREMENTS
+
+This is mandatory.
+
+Do not treat sidebar hiding as security.
+
+For every protected API:
+
+- Authenticate the user or agent.
+- Verify portal identity and authorization.
+- Derive tenant scope from trusted authentication context.
+- Validate branch access.
+- Verify record ownership.
+- Reject unauthorized requests.
+- Record sensitive management actions in audit logs.
+
+Test:
+
+1. Receptionist attempting to access CCTV intelligence API.
+2. Cashier attempting to access CCTV evidence.
+3. Branch Manager attempting to access another branch.
+4. Tenant Owner attempting to access another tenant.
+5. Tenant user attempting to access Platform Management APIs.
+6. CCTV Agent attempting to access another branch's cameras.
+7. CCTV Technician attempting to access tenant financial data.
+8. Non-Super Admin attempting to change global AI configuration.
+
+All must be rejected appropriately.
+
+Use 403 or 404 according to the existing security design, without leaking sensitive cross-tenant records.
+
+Preserve all previously verified tenant isolation guarantees.
+
+---
+
+# 11. DATA INTEGRITY & EXISTING FUNCTIONALITY
+
+This phase must not break:
+
+- PostgreSQL migrations.
+- Existing database schemas.
+- Authentication.
+- Tenant isolation.
+- Branch isolation.
+- Reservations.
+- Guest records.
+- GuestStay.
+- Check-in/check-out.
+- Invoices and payments.
+- Housekeeping.
+- CCTV events.
+- Camera-to-room mappings.
+- Door-zone configurations.
+- Gemini analysis pipeline.
+- Evidence storage.
+- Offline event buffering.
+- Idempotent cloud synchronization.
+- Existing audit logs.
+
+Important business rules:
+
+1. PMS remains authoritative for reservations, GuestStay, billing and payments.
+2. CCTV provides evidence and occupancy intelligence, not automatic financial authority.
+3. CCTV must never automatically check guests in or out.
+4. Unmatched entry is not automatically confirmed unauthorized access.
+5. Final revenue investigation decisions require authorized human review.
+6. Local CCTV Agent must remain functional during internet outages.
+7. Platform-level administrative actions must be auditable.
+
+Do not create unnecessary database migrations for navigation-only changes.
+
+If new permissions or role mappings require schema changes, create versioned migrations and document their rollback strategy.
+
+---
+
+# 12. IMPLEMENTATION STRATEGY
+
+Execute in controlled stages.
+
+### Stage 1 — Audit
+
+Inspect existing implementation and produce the pre-implementation report.
+
+### Stage 2 — Portal Navigation Refactoring
+
+Implement the three separate sidebar configurations.
+
+### Stage 3 — Role & Permission Alignment
+
+Map existing roles to granular permissions.
+
+Ensure ordinary Reception, Cashier and Housekeeping roles cannot access CCTV intelligence.
+
+### Stage 4 — Tenant CCTV Management
+
+Move CCTV Intelligence, Events, Revenue Investigation, Room Activity, Event Timeline and CCTV Reports into authorized tenant management navigation.
+
+Implement branch-aware filtering using existing APIs and backend authorization.
+
+### Stage 5 — CCTV Agent Navigation
+
+Allocate camera registration, live monitoring, door zones, video processing, evidence management, local queue, storage and synchronization to the Agent Portal.
+
+### Stage 6 — Platform Management
+
+Allocate global tenant, subscription, device, agent, AI provider, cost, storage, security and system management functions to the Platform Portal.
+
+### Stage 7 — Testing
+
+Run all functional, routing, permission and security tests.
+
+### Stage 8 — Documentation
+
+Generate final implementation and verification reports.
+
+Do not start unrelated development or redesign unrelated modules.
+
+---
+
+# 13. REQUIRED TESTS & ACCEPTANCE CRITERIA
+
+## Navigation Tests
+
+- Lodge Portal shows only authorized tenant modules.
+- Platform Portal shows only authorized platform modules.
+- Agent Portal shows only local CCTV infrastructure functions.
+- No duplicate route IDs or conflicting navigation entries.
+- All active menu items open functional pages.
+- No dead links or placeholder pages presented as completed features.
+
+## Role Tests
+
+- Receptionist sees no CCTV management menu.
+- Cashier sees no CCTV management menu.
+- Housekeeping staff sees no CCTV management menu.
+- Branch Manager sees authorized branch CCTV data only.
+- Tenant Owner can access all authorized branches.
+- CCTV Technician can access assigned Agent functions only.
+- Super Admin can access global platform management.
+- Tenant users cannot access global platform administration.
+
+## Branch Isolation Tests
+
+- Tenant Owner can filter authorized branches.
+- Branch Manager cannot access unassigned branches.
+- Changing a branch ID manually does not bypass backend authorization.
+- CCTV evidence access is branch- and permission-scoped.
+
+## Integration Tests
+
+- CCTV Agent continues local processing.
+- Events continue synchronizing to the cloud.
+- Tenant management receives valid event summaries.
+- Gemini analysis results remain accessible to authorized management.
+- Existing PMS records remain unchanged by CCTV events.
+- Platform management displays actual agent and AI usage data.
+
+## Build Tests
+
+Run:
+
+- TypeScript compilation.
+- ESLint or the project's configured lint command.
+- Frontend production build.
+- Backend tests.
+- Existing integration tests.
+- Tenant isolation tests.
+- Role authorization tests.
+
+Resolve regressions introduced by this phase.
+
+Do not modify unrelated code merely to make tests pass.
+
+---
+
+# 14. REQUIRED REPORTS
+
+Generate the following files under `/reports/`:
+
+1. `PHASE_12A_PRE_IMPLEMENTATION_AUDIT.md`
+2. `PHASE_12A_SIDEBAR_IMPLEMENTATION_REPORT.md`
+3. `PHASE_12A_PORTAL_ALLOCATION_REPORT.md`
+4. `PHASE_12A_RBAC_PERMISSION_MATRIX.md`
+5. `PHASE_12A_TENANT_BRANCH_ISOLATION_TESTS.md`
+6. `PHASE_12A_ROUTE_SECURITY_TESTS.md`
+7. `PHASE_12A_INTEGRATION_REGRESSION_REPORT.md`
+8. `PHASE_12A_FINAL_ACCEPTANCE_REPORT.md`
+
+For each feature, classify its status as:
+
+- `VERIFIED`
+- `IMPLEMENTED_NOT_VERIFIED`
+- `PARTIALLY_IMPLEMENTED`
+- `NOT_IMPLEMENTED`
+- `BLOCKED`
+
+Clearly distinguish existing functionality from newly implemented functionality.
+
+Do not claim that a feature is complete merely because its sidebar item exists.
+
+---
+
+# 15. STRICT DEVELOPMENT RULES
+
+- Do not delete existing working modules.
+- Do not replace real API data with mock data.
+- Do not introduce hardcoded production metrics.
+- Do not break Phase 11 verified integrations.
+- Do not weaken tenant or branch isolation.
+- Do not expose CCTV intelligence to ordinary Reception users.
+- Do not give Tenant Owners global Super Admin access.
+- Do not move actual camera processing into the cloud unnecessarily.
+- Do not claim Gemini runs locally when it is cloud-based.
+- Do not introduce automatic CCTV-driven check-in/check-out.
+- Do not perform destructive database migrations.
+- Do not expose API keys or agent secrets in frontend code.
+- Do not build fake or non-functional settings pages.
+- Preserve the existing Blue & White Enterprise Dashboard design.
+
+If the current architecture makes a requested feature impossible without substantial backend changes, document the limitation and propose the smallest safe implementation.
+
+---
+
+# 16. FINAL EXECUTION INSTRUCTION
+
+Implement Phase 12A in the existing ENKAI LODGEFLOW codebase.
+
+Start by auditing the real source code and existing functionality.
+
+Then implement the portal allocation, sidebars, route separation, role-based navigation, backend authorization alignment and tests.
+
+Preserve all working Phase 11 functionality.
+
+At completion, provide a concise summary containing:
+
+1. Files/components changed.
+2. Routes added, changed or removed.
+3. Permission changes.
+4. Features successfully implemented.
+5. Security tests executed and their actual results.
+6. Build and test results.
+7. Outstanding gaps.
+8. Location of all generated reports.
+
+**Stop after Phase 12A implementation, regression verification and report generation. Do not begin Phase 12B or unrelated development without approval.**
+
+The final goal is a production-grade separation of responsibilities:
+
+- **Lodge Management:** Business operations and management-level CCTV intelligence.
+- **CCTV Edge Agent:** Local cameras, AI detection, video processing, evidence and synchronization.
+- **Platform Management:** Complete global ENKAI SaaS administration.
+
+These three portals must operate as one integrated platform while maintaining strict separation of responsibilities, permissions, tenant data and branch access.

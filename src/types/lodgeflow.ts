@@ -328,3 +328,122 @@ export interface Phase03ExecutedTestRecord {
   accuracy_report: AccuracyValidationReport;
 }
 
+
+/**
+ * Multi-Tenant Platform & Lodge Management Types
+ */
+export interface TenantInfo {
+  id: string;
+  name: string;
+  slug: string;
+  subscriptionTier: 'STANDARD' | 'PROFESSIONAL' | 'ENTERPRISE';
+  status: 'ACTIVE' | 'SUSPENDED';
+  branchesCount: number;
+  camerasCount: number;
+  createdAt: string;
+}
+
+export interface ReservationInfo {
+  id: string;
+  branchName: string;
+  roomId: string;
+  guestName: string;
+  checkInDate: string;
+  checkOutDate: string;
+  status: 'CONFIRMED' | 'CHECKED_IN' | 'CHECKED_OUT' | 'CANCELLED';
+  totalAmount: number;
+}
+
+export interface GuestInfo {
+  id: string;
+  fullName: string;
+  phone: string;
+  email: string;
+  idNumber: string;
+  totalStays: number;
+}
+
+export interface InvoiceInfo {
+  id: string;
+  reservationId: string;
+  guestName: string;
+  roomNumber: string;
+  amount: number;
+  paid: number;
+  status: 'PAID' | 'PENDING' | 'OVERDUE';
+  date: string;
+}
+
+export interface ExpenseInfo {
+  id: string;
+  category: string;
+  amount: number;
+  description: string;
+  date: string;
+}
+
+export interface UnrecordedRevenueInvestigationItem {
+  investigationId: string;
+  roomId: string;
+  cameraName: string;
+  entryTimestamp: string;
+  exitTimestamp: string | null;
+  observedDuration: string;
+  detectedPeopleCount: number;
+  pmsMatchStatus: 'MATCHED_STAY' | 'UNMATCHED_ENTRY' | 'POSSIBLE_UNRECORDED_STAY' | 'CLEANING_CREW';
+  investigationStatus: 'REVIEW_REQUIRED' | 'CLEARED' | 'CONFIRMED_UNRECORDED_REVENUE';
+  confidence: number;
+  potentialExposure: number;
+  notes?: string;
+}
+
+export interface CctvAgentDevice {
+  agentId: string;
+  branchName: string;
+  agentName: string;
+  ipAddress: string;
+  status: 'ONLINE' | 'OFFLINE' | 'SYNCING';
+  camerasCount: number;
+  lastSeen: string;
+}
+
+export type Permission =
+  | 'dashboard.view'
+  | 'reservations.view'
+  | 'reservations.manage'
+  | 'guests.view'
+  | 'guests.manage'
+  | 'checkin.manage'
+  | 'rooms.view'
+  | 'rooms.manage'
+  | 'housekeeping.manage'
+  | 'billing.view'
+  | 'billing.manage'
+  | 'expenses.manage'
+  | 'staff.manage'
+  | 'reports.view'
+  | 'cctv.intelligence.view'
+  | 'cctv.events.view'
+  | 'cctv.evidence.view'
+  | 'cctv.investigation.manage'
+  | 'cctv.reports.view'
+  | 'branches.manage'
+  | 'users.manage'
+  | 'settings.manage'
+  | 'audit.view'
+  | 'platform.dashboard.view'
+  | 'platform.tenants.manage'
+  | 'platform.subscriptions.manage'
+  | 'platform.devices.manage'
+  | 'platform.agents.manage'
+  | 'platform.ai.manage'
+  | 'platform.security.manage'
+  | 'platform.audit.view';
+
+export interface UserContext {
+  userId: string;
+  tenantId: string;
+  branchIds: string[];
+  role: 'TENANT_OWNER' | 'GENERAL_MANAGER' | 'BRANCH_MANAGER' | 'RECEPTIONIST' | 'CASHIER' | 'HOUSEKEEPING' | 'CCTV_OFFICER' | 'PLATFORM_ADMIN';
+  permissions: Permission[];
+}

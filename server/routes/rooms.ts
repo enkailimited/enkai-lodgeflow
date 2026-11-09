@@ -12,7 +12,7 @@
 import express, { Router } from 'express';
 import { getRoom, createRoom, deleteRoom, listRooms, updateRoom, updateRoomStatus } from '../db/roomStore';
 import { asyncRoute, roomErrorHandler, sendCreated, sendData, sendError } from '../http/respond';
-import { requireAdminToken } from '../middleware/adminToken';
+import { authorize } from '../middleware/auth';
 import { validateRoomInput, validateRoomStatus } from '../validation/rooms';
 
 function sendValidationError(
@@ -99,7 +99,7 @@ export function createRoomsRouter(): Router {
 
   router.delete(
     '/:id',
-    requireAdminToken,
+    authorize('rooms.manage'),
     asyncRoute(async (req, res) => {
       await deleteRoom(req.params.id);
       res.status(204).end();

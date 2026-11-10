@@ -31,6 +31,10 @@ const STATUS_BY_CODE: Record<string, number> = {
   IMPORT_CONFLICT: 409,
   IMPORT_INVALID_PAYLOAD: 422,
   VALIDATION_FAILED: 422,
+  INVALID_ROOM_DATA: 422,
+  INVALID_CATEGORY_DATA: 422,
+  INVALID_PRICING: 422,
+  INVALID_STATUS: 409,
   DATABASE_UNAVAILABLE: 503,
   ADMIN_TOKEN_NOT_CONFIGURED: 503,
   FORBIDDEN: 403,
@@ -118,5 +122,49 @@ export function roomErrorHandler(
 
   const message = error instanceof Error ? error.message : String(error);
   console.error('[room-api] unhandled error:', message);
+  sendError(res, 500, 'INTERNAL_ERROR', 'An unexpected server error occurred.');
+}
+
+/**
+ * Final error middleware for the ERP routers. Maps domain validation errors
+ * and typed database errors; never forwards driver messages.
+ */
+export function apiErrorHandler(
+  error: unknown,
+  _req: Request,
+  res: Response,
+  _next: NextFunction
+): void {
+  if (res.headersSent) return;
+
+  if (isRoomDbError(error)) {
+    sendRoomDbError(res, error);
+    return;
+  }
+
+  const validation = error as { name?: string; fieldErrors?: Record<string, string> };
+  if (validation?.name === 'ValidationError' && validation.fieldErrors) {
+    sendError(res, 422, 'VALIDATION_FAILED', 'Please correct the highlighted fields.', {
+      fieldErrors: validation.fieldErrors,
+    });
+    return;
+  }
+
+  const pgError = error as { code?: string; constraint?: string };
+  if (pgError?.code === '23505') {
+    sendError(res, 409, 'DUPLICATE_RECORD', 'A record with those details already exists.');
+    return;
+  }
+  if (pgError?.code === '23503') {
+    sendError(res, 409, 'REFERENCE_CONFLICT', 'A referenced record no longer exists.');
+    return;
+  }
+  if (pgError?.code === '23P01') {
+    sendError(res, 409, 'ROOM_HAS_ACTIVE_RESERVATIONS', 'That room is already reserved for those dates.');
+    return;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  console.error('[api] unhandled error:', message);
   sendError(res, 500, 'INTERNAL_ERROR', 'An unexpected server error occurred.');
 }

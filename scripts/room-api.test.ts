@@ -18,11 +18,23 @@ import test, { after, before, beforeEach } from 'node:test';
 import type { Server } from 'node:http';
 import { closePool, getPool } from '../server/db/pool';
 import { runMigrations } from '../server/db/migrate';
+import { attachAuth } from '../server/middleware/auth';
+import { createAuthRouter } from '../server/routes/auth';
+import { createTenant } from '../server/db/tenantStore';
 import { createRoomCategoriesRouter } from '../server/routes/roomCategories';
 import { createRoomsRouter } from '../server/routes/rooms';
 import { createRoomImportRouter } from '../server/routes/roomImport';
 
-const DATABASE_URL = (process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? '').trim();
+const TEST_URL = (process.env.TEST_DATABASE_URL ?? '').trim();
+const PRODUCTION_FALLBACK =
+  (process.env.DATABASE_URL ?? '').toLowerCase().includes('_test')
+    ? (process.env.DATABASE_URL ?? '').trim()
+    : '';
+const DATABASE_URL = TEST_URL || PRODUCTION_FALLBACK;
+
+// The application pool reads DATABASE_URL. Point it at the dedicated test
+// database so this destructive suite can never touch production data.
+if (DATABASE_URL) process.env.DATABASE_URL = DATABASE_URL;
 
 interface ApiResponse {
   status: number;
@@ -32,11 +44,16 @@ interface ApiResponse {
 let baseUrl = '';
 let server: Server | null = null;
 let categoryId = '';
+let authToken = '';
+const ownerEmail = 'rooms-owner@test.local';
 
 async function api(path: string, init: RequestInit = {}): Promise<ApiResponse> {
   const headers = new Headers(init.headers);
   if (init.body !== undefined && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
+  }
+  if (authToken && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${authToken}`);
   }
   const response = await fetch(`${baseUrl}${path}`, { ...init, headers });
   const text = await response.text();
@@ -80,11 +97,21 @@ async function resetDatabase(): Promise<void> {
 
 async function registerTests(): Promise<void> {
   before(async () => {
-    process.env.ROOM_ADMIN_TOKEN = 'test-admin-token';
     await runMigrations(DATABASE_URL);
+    await getPool().query('DELETE FROM users');
+    await getPool().query('DELETE FROM tenants');
+    await createTenant({
+      name: 'Rooms Test Lodge',
+      slug: 'rooms-test-lodge',
+      ownerName: 'Rooms Owner',
+      ownerEmail,
+      ownerPassword: 'OwnerPass123!',
+    });
 
     const app = express();
     app.use(express.json({ limit: '2mb' }));
+    app.use('/api', attachAuth);
+    app.use('/api/auth', createAuthRouter());
     app.use('/api/rooms', createRoomsRouter());
     app.use('/api/room-categories', createRoomCategoriesRouter());
     app.use('/api/room-import', createRoomImportRouter());
@@ -97,6 +124,16 @@ async function registerTests(): Promise<void> {
     const address = listening.address();
     if (!address || typeof address === 'string') throw new Error('Test server failed to bind.');
     baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const login = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: ownerEmail, password: 'OwnerPass123!' }),
+    });
+    const cookie = login.headers.get('set-cookie') ?? '';
+    const match = /lodge_session=([a-f0-9]+)/.exec(cookie);
+    if (!match) throw new Error('Room API tests could not obtain a session token.');
+    authToken = match[1];
   });
 
   beforeEach(async () => {
@@ -148,13 +185,7 @@ async function registerTests(): Promise<void> {
     assert.equal(statusOnly.status, 200);
     assert.equal(statusOnly.body.data.room.status, 'CLEANING');
 
-    const denied = await api(`/api/rooms/${room.id}`, { method: 'DELETE' });
-    assert.equal(denied.status, 403);
-
-    const deleted = await api(`/api/rooms/${room.id}`, {
-      method: 'DELETE',
-      headers: { 'X-Admin-Token': 'test-admin-token' },
-    });
+    const deleted = await api(`/api/rooms/${room.id}`, { method: 'DELETE' });
     assert.equal(deleted.status, 204);
 
     const afterDelete = await api('/api/rooms');
@@ -244,27 +275,23 @@ async function registerTests(): Promise<void> {
 
   test('blocks category deletion while rooms reference it', async () => {
     await api('/api/rooms', { method: 'POST', body: JSON.stringify(roomPayload()) });
-    const blocked = await api(`/api/room-categories/${categoryId}`, {
-      method: 'DELETE',
-      headers: { 'X-Admin-Token': 'test-admin-token' },
-    });
+    const blocked = await api(`/api/room-categories/${categoryId}`, { method: 'DELETE' });
     assert.equal(blocked.status, 409);
     assert.equal(blocked.body.error.code, 'CATEGORY_HAS_ROOMS');
   });
 
-  test('destructive routes require the admin token', async () => {
+  test('destructive routes require authentication', async () => {
     const created = await api('/api/rooms', {
       method: 'POST',
       body: JSON.stringify(roomPayload()),
     });
     const roomId = created.body.data.room.id;
 
-    const wrong = await api(`/api/rooms/${roomId}`, {
+    const denied = await api(`/api/rooms/${roomId}`, {
       method: 'DELETE',
-      headers: { 'X-Admin-Token': 'wrong-token' },
+      headers: { Authorization: 'Bearer invalid-token' },
     });
-    assert.equal(wrong.status, 403);
-    assert.equal(wrong.body.error.code, 'FORBIDDEN');
+    assert.equal(denied.status, 401);
   });
 
   test('import previews, commits once, and never overwrites server data', async () => {
@@ -308,13 +335,13 @@ async function registerTests(): Promise<void> {
     const missingToken = await api('/api/room-import/commit', {
       method: 'POST',
       body: JSON.stringify(payload),
+      headers: { Authorization: 'Bearer invalid-token' },
     });
-    assert.equal(missingToken.status, 403);
+    assert.equal(missingToken.status, 401);
 
     const committed = await api('/api/room-import/commit', {
       method: 'POST',
       body: JSON.stringify(payload),
-      headers: { 'X-Admin-Token': 'test-admin-token' },
     });
     assert.equal(committed.status, 200, JSON.stringify(committed.body));
     assert.equal(committed.body.data.importedRooms, 1);
@@ -326,7 +353,6 @@ async function registerTests(): Promise<void> {
     const repeated = await api('/api/room-import/commit', {
       method: 'POST',
       body: JSON.stringify(payload),
-      headers: { 'X-Admin-Token': 'test-admin-token' },
     });
     assert.equal(repeated.status, 409);
     assert.equal(repeated.body.error.code, 'IMPORT_ALREADY_APPLIED');

@@ -1,22 +1,17 @@
 /**
- * ENKAI LODGEFLOW — GATE 2.0
- * Room category endpoints.
+ * Room category endpoints (tenant-scoped).
  *
  *   GET    /api/room-categories
  *   POST   /api/room-categories
  *   PATCH  /api/room-categories/:id
- *   DELETE /api/room-categories/:id   (admin token; blocked while rooms exist)
+ *   DELETE /api/room-categories/:id   (blocked while rooms exist)
  */
 
 import express, { Router } from 'express';
-import {
-  createCategory,
-  deleteCategory,
-  listCategories,
-  updateCategory,
-} from '../db/roomStore';
+import { createCategory, deleteCategory, listCategories, updateCategory } from '../db/roomStore';
+import { recordAudit } from '../db/auditStore';
 import { asyncRoute, roomErrorHandler, sendCreated, sendData, sendError } from '../http/respond';
-import { requireAdminToken } from '../middleware/adminToken';
+import { getScope, requireAuth, requirePermission, resolveTenantScope } from '../middleware/auth';
 import { validateCategoryInput } from '../validation/rooms';
 
 function sendValidationError(
@@ -31,46 +26,70 @@ function sendValidationError(
 export function createRoomCategoriesRouter(): Router {
   const router = Router();
   router.use(express.json({ limit: '64kb' }));
+  router.use(requireAuth, resolveTenantScope);
 
   router.get(
     '/',
-    asyncRoute(async (_req, res) => {
-      const categories = await listCategories();
+    requirePermission('room.read'),
+    asyncRoute(async (req, res) => {
+      const categories = await listCategories(getScope(req));
       sendData(res, { categories }, { count: categories.length });
     })
   );
 
   router.post(
     '/',
+    requirePermission('room.write'),
     asyncRoute(async (req, res) => {
       const validation = validateCategoryInput(req.body);
       if (!validation.value) {
         sendValidationError(res, validation.fieldErrors);
         return;
       }
-      const category = await createCategory(validation.value);
+      const scope = getScope(req);
+      const category = await createCategory(scope, validation.value);
+      await recordAudit({
+        tenantId: scope.tenantId,
+        actorUserId: scope.user.id,
+        actorEmail: scope.user.email,
+        action: 'room_category.created',
+        entityType: 'room_category',
+        entityId: category.id,
+        ip: req.ip,
+      });
       sendCreated(res, { category });
     })
   );
 
   router.patch(
     '/:id',
+    requirePermission('room.write'),
     asyncRoute(async (req, res) => {
       const validation = validateCategoryInput(req.body);
       if (!validation.value) {
         sendValidationError(res, validation.fieldErrors);
         return;
       }
-      const category = await updateCategory(req.params.id, validation.value);
+      const category = await updateCategory(getScope(req), req.params.id, validation.value);
       sendData(res, { category });
     })
   );
 
   router.delete(
     '/:id',
-    requireAdminToken,
+    requirePermission('room.delete'),
     asyncRoute(async (req, res) => {
-      await deleteCategory(req.params.id);
+      const scope = getScope(req);
+      await deleteCategory(scope, req.params.id);
+      await recordAudit({
+        tenantId: scope.tenantId,
+        actorUserId: scope.user.id,
+        actorEmail: scope.user.email,
+        action: 'room_category.deleted',
+        entityType: 'room_category',
+        entityId: req.params.id,
+        ip: req.ip,
+      });
       res.status(204).end();
     })
   );

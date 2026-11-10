@@ -1,11 +1,9 @@
 /**
- * ENKAI LODGEFLOW — GATE 2.0
- * PostgreSQL room inventory data access.
+ * ENKAI LODGEFLOW — multi-tenant room inventory data access.
  *
- * All SQL is parameterized. Rooms are soft-deleted (`archived_at`) so that a
- * deletion can never orphan historical references once reservations exist.
- * The D15 guard below already checks for a `reservations` table if a later gate
- * has created one.
+ * Every query is scoped to a tenant (and optionally a branch). All SQL is
+ * parameterized. Rooms are soft-deleted (`archived_at`) so historical stays and
+ * reservations can never dangle.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -14,6 +12,11 @@ import { Room, RoomCategory, RoomPricing, RoomStatus } from '../../src/types/roo
 import { ValidCategoryInput, ValidRoomInput } from '../validation/rooms';
 import { RoomDbError } from './errors';
 import { getPool, withTransaction } from './pool';
+
+export interface RoomScope {
+  tenantId: string;
+  branchId: string | null;
+}
 
 interface RoomRow {
   id: string;
@@ -94,14 +97,20 @@ function mapPostgresError(error: unknown): never {
   const pgError = error as { code?: string; constraint?: string };
 
   if (pgError.code === '23505') {
-    if (pgError.constraint === 'rooms_room_number_unique') {
+    if (
+      pgError.constraint === 'rooms_room_number_unique' ||
+      pgError.constraint === 'rooms_tenant_branch_number_unique'
+    ) {
       throw new RoomDbError(
         'DUPLICATE_ROOM_NUMBER',
-        'A room with this number already exists.',
+        'A room with this number already exists in this branch.',
         'roomNumber'
       );
     }
-    if (pgError.constraint === 'room_categories_name_unique') {
+    if (
+      pgError.constraint === 'room_categories_name_unique' ||
+      pgError.constraint === 'room_categories_tenant_name_unique'
+    ) {
       throw new RoomDbError(
         'DUPLICATE_CATEGORY_NAME',
         'A category with this name already exists.',
@@ -113,7 +122,7 @@ function mapPostgresError(error: unknown): never {
   if (pgError.code === '23503') {
     throw new RoomDbError(
       'CATEGORY_NOT_FOUND',
-      'Select a valid room category.',
+      'Select a valid room category for this business.',
       'categoryId'
     );
   }
@@ -129,7 +138,6 @@ function mapPostgresError(error: unknown): never {
     pgError.code === '28P01' ||
     pgError.code === '3D000' ||
     pgError.code === '57P03' ||
-    // Neon/pg surface cold-start failures as a plain message without a code.
     /connection timeout|timeout expired|terminating connection/i.test(
       (error as { message?: string }).message ?? ''
     )
@@ -143,15 +151,33 @@ function mapPostgresError(error: unknown): never {
   throw error;
 }
 
+/** Every room belongs to a branch. Resolve the requested or default one. */
+export async function resolveScopeBranch(scope: RoomScope): Promise<string> {
+  if (scope.branchId) return scope.branchId;
+  const result = await getPool().query<{ id: string }>(
+    `SELECT id FROM branches
+      WHERE tenant_id = $1 AND status = 'ACTIVE'
+      ORDER BY is_default DESC, created_at ASC LIMIT 1`,
+    [scope.tenantId]
+  );
+  if (!result.rows[0]) {
+    throw new RoomDbError('INVALID_ROOM_DATA', 'Create a branch before adding rooms.');
+  }
+  return result.rows[0].id;
+}
+
 /* ---------------------------------- rooms --------------------------------- */
 
-export async function listRooms(): Promise<Room[]> {
+export async function listRooms(scope: RoomScope): Promise<Room[]> {
   try {
     const result = await getPool().query<RoomRow>(
       `SELECT ${ROOM_COLUMNS}
          FROM rooms
-        WHERE archived_at IS NULL
-        ORDER BY created_at ASC, id ASC`
+        WHERE tenant_id = $1
+          AND ($2::text IS NULL OR branch_id = $2)
+          AND archived_at IS NULL
+        ORDER BY created_at ASC, id ASC`,
+      [scope.tenantId, scope.branchId]
     );
     return result.rows.map(mapRoom);
   } catch (error) {
@@ -159,13 +185,13 @@ export async function listRooms(): Promise<Room[]> {
   }
 }
 
-export async function getRoom(id: string): Promise<Room> {
+export async function getRoom(scope: RoomScope, id: string): Promise<Room> {
   try {
     const result = await getPool().query<RoomRow>(
       `SELECT ${ROOM_COLUMNS}
          FROM rooms
-        WHERE id = $1 AND archived_at IS NULL`,
-      [id]
+        WHERE id = $1 AND tenant_id = $2 AND archived_at IS NULL`,
+      [id, scope.tenantId]
     );
     if (result.rowCount === 0) {
       throw new RoomDbError('ROOM_NOT_FOUND', 'This room no longer exists.');
@@ -177,16 +203,20 @@ export async function getRoom(id: string): Promise<Room> {
   }
 }
 
-export async function createRoom(input: ValidRoomInput): Promise<Room> {
+export async function createRoom(scope: RoomScope, input: ValidRoomInput): Promise<Room> {
   try {
+    const branchId = await resolveScopeBranch(scope);
     const result = await getPool().query<RoomRow>(
       `INSERT INTO rooms (
-         id, room_number, name, category_id, floor, capacity, status, description,
-         hourly_rate, daily_rate, overnight_rate, currency, pricing_updated_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'TZS', now())
+         id, tenant_id, branch_id, room_number, name, category_id, floor, capacity,
+         status, description, hourly_rate, daily_rate, overnight_rate, currency,
+         pricing_updated_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'TZS', now())
        RETURNING ${ROOM_COLUMNS}`,
       [
         `room-${randomUUID()}`,
+        scope.tenantId,
+        branchId,
         input.roomNumber,
         input.name,
         input.categoryId,
@@ -205,26 +235,31 @@ export async function createRoom(input: ValidRoomInput): Promise<Room> {
   }
 }
 
-export async function updateRoom(id: string, input: ValidRoomInput): Promise<Room> {
+export async function updateRoom(
+  scope: RoomScope,
+  id: string,
+  input: ValidRoomInput
+): Promise<Room> {
   try {
     const result = await getPool().query<RoomRow>(
       `UPDATE rooms
-          SET room_number = $2,
-              name = $3,
-              category_id = $4,
-              floor = $5,
-              capacity = $6,
-              status = $7,
-              description = $8,
-              hourly_rate = $9,
-              daily_rate = $10,
-              overnight_rate = $11,
+          SET room_number = $3,
+              name = $4,
+              category_id = $5,
+              floor = $6,
+              capacity = $7,
+              status = $8,
+              description = $9,
+              hourly_rate = $10,
+              daily_rate = $11,
+              overnight_rate = $12,
               pricing_updated_at = now(),
               updated_at = now()
-        WHERE id = $1 AND archived_at IS NULL
+        WHERE id = $1 AND tenant_id = $2 AND archived_at IS NULL
         RETURNING ${ROOM_COLUMNS}`,
       [
         id,
+        scope.tenantId,
         input.roomNumber,
         input.name,
         input.categoryId,
@@ -249,14 +284,18 @@ export async function updateRoom(id: string, input: ValidRoomInput): Promise<Roo
 }
 
 /** Operational status change only — never touches pricing or booking state. */
-export async function updateRoomStatus(id: string, status: RoomStatus): Promise<Room> {
+export async function updateRoomStatus(
+  scope: RoomScope,
+  id: string,
+  status: RoomStatus
+): Promise<Room> {
   try {
     const result = await getPool().query<RoomRow>(
       `UPDATE rooms
-          SET status = $2, updated_at = now()
-        WHERE id = $1 AND archived_at IS NULL
+          SET status = $3, updated_at = now()
+        WHERE id = $1 AND tenant_id = $2 AND archived_at IS NULL
         RETURNING ${ROOM_COLUMNS}`,
-      [id, status]
+      [id, scope.tenantId, status]
     );
     if (result.rowCount === 0) {
       throw new RoomDbError('ROOM_NOT_FOUND', 'This room no longer exists.');
@@ -269,38 +308,42 @@ export async function updateRoomStatus(id: string, status: RoomStatus): Promise<
 }
 
 /**
- * D15: a room may not be removed while a non-terminal reservation references
- * it. Reservations do not exist yet, so the guard is conditional on the table
- * being present. Terminal (CANCELLED / NO_SHOW / COMPLETED) reservations do not
- * block removal.
+ * A room may not be removed while a non-terminal reservation or an active stay
+ * references it.
  */
 async function assertNoActiveReservations(client: PoolClient, roomId: string): Promise<void> {
-  const tableCheck = await client.query<{ table_name: string | null }>(
-    `SELECT to_regclass('public.reservations')::text AS table_name`
-  );
-  if (!tableCheck.rows[0]?.table_name) return;
-
   const active = await client.query<{ count: string }>(
     `SELECT count(*)::text AS count
        FROM reservations
       WHERE room_id = $1
-        AND status IN ('PENDING', 'CONFIRMED')`,
+        AND status IN ('PENDING', 'CONFIRMED', 'CHECKED_IN')`,
     [roomId]
   );
-
   if (Number(active.rows[0]?.count ?? 0) > 0) {
     throw new RoomDbError(
       'ROOM_HAS_ACTIVE_RESERVATIONS',
       'This room has active reservations and cannot be deleted.'
     );
   }
+
+  const stay = await client.query<{ count: string }>(
+    `SELECT count(*)::text AS count FROM guest_stays WHERE room_id = $1 AND status = 'ACTIVE'`,
+    [roomId]
+  );
+  if (Number(stay.rows[0]?.count ?? 0) > 0) {
+    throw new RoomDbError(
+      'ROOM_HAS_ACTIVE_RESERVATIONS',
+      'This room has an active guest stay and cannot be deleted.'
+    );
+  }
 }
 
-export async function deleteRoom(id: string): Promise<void> {
+export async function deleteRoom(scope: RoomScope, id: string): Promise<void> {
   await withTransaction(async (client) => {
     const existing = await client.query<{ id: string }>(
-      `SELECT id FROM rooms WHERE id = $1 AND archived_at IS NULL FOR UPDATE`,
-      [id]
+      `SELECT id FROM rooms
+        WHERE id = $1 AND tenant_id = $2 AND archived_at IS NULL FOR UPDATE`,
+      [id, scope.tenantId]
     );
     if (existing.rowCount === 0) {
       throw new RoomDbError('ROOM_NOT_FOUND', 'This room no longer exists.');
@@ -309,22 +352,22 @@ export async function deleteRoom(id: string): Promise<void> {
     await assertNoActiveReservations(client, id);
 
     await client.query(
-      `UPDATE rooms
-          SET archived_at = now(), updated_at = now()
-        WHERE id = $1`,
-      [id]
+      `UPDATE rooms SET archived_at = now(), updated_at = now() WHERE id = $1 AND tenant_id = $2`,
+      [id, scope.tenantId]
     );
   });
 }
 
 /* -------------------------------- categories ------------------------------ */
 
-export async function listCategories(): Promise<RoomCategory[]> {
+export async function listCategories(scope: RoomScope): Promise<RoomCategory[]> {
   try {
     const result = await getPool().query<CategoryRow>(
       `SELECT ${CATEGORY_COLUMNS}
          FROM room_categories
-        ORDER BY created_at ASC, id ASC`
+        WHERE tenant_id = $1
+        ORDER BY created_at ASC, id ASC`,
+      [scope.tenantId]
     );
     return result.rows.map(mapCategory);
   } catch (error) {
@@ -332,10 +375,10 @@ export async function listCategories(): Promise<RoomCategory[]> {
   }
 }
 
-export async function getCategory(id: string): Promise<RoomCategory> {
+export async function getCategory(scope: RoomScope, id: string): Promise<RoomCategory> {
   const result = await getPool().query<CategoryRow>(
-    `SELECT ${CATEGORY_COLUMNS} FROM room_categories WHERE id = $1`,
-    [id]
+    `SELECT ${CATEGORY_COLUMNS} FROM room_categories WHERE id = $1 AND tenant_id = $2`,
+    [id, scope.tenantId]
   );
   if (result.rowCount === 0) {
     throw new RoomDbError('CATEGORY_NOT_FOUND', 'This category no longer exists.');
@@ -343,13 +386,16 @@ export async function getCategory(id: string): Promise<RoomCategory> {
   return mapCategory(result.rows[0]);
 }
 
-export async function createCategory(input: ValidCategoryInput): Promise<RoomCategory> {
+export async function createCategory(
+  scope: RoomScope,
+  input: ValidCategoryInput
+): Promise<RoomCategory> {
   try {
     const result = await getPool().query<CategoryRow>(
-      `INSERT INTO room_categories (id, name, description)
-       VALUES ($1, $2, $3)
+      `INSERT INTO room_categories (id, tenant_id, branch_id, name, description)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING ${CATEGORY_COLUMNS}`,
-      [`cat-${randomUUID()}`, input.name, input.description]
+      [`cat-${randomUUID()}`, scope.tenantId, scope.branchId, input.name, input.description]
     );
     return mapCategory(result.rows[0]);
   } catch (error) {
@@ -358,16 +404,17 @@ export async function createCategory(input: ValidCategoryInput): Promise<RoomCat
 }
 
 export async function updateCategory(
+  scope: RoomScope,
   id: string,
   input: ValidCategoryInput
 ): Promise<RoomCategory> {
   try {
     const result = await getPool().query<CategoryRow>(
       `UPDATE room_categories
-          SET name = $2, description = $3, updated_at = now()
-        WHERE id = $1
+          SET name = $3, description = $4, updated_at = now()
+        WHERE id = $1 AND tenant_id = $2
         RETURNING ${CATEGORY_COLUMNS}`,
-      [id, input.name, input.description]
+      [id, scope.tenantId, input.name, input.description]
     );
     if (result.rowCount === 0) {
       throw new RoomDbError('CATEGORY_NOT_FOUND', 'This category no longer exists.');
@@ -380,19 +427,19 @@ export async function updateCategory(
 }
 
 /** Deleting a category with rooms (including archived rooms) would orphan data. */
-export async function deleteCategory(id: string): Promise<void> {
+export async function deleteCategory(scope: RoomScope, id: string): Promise<void> {
   await withTransaction(async (client) => {
     const existing = await client.query<{ id: string }>(
-      `SELECT id FROM room_categories WHERE id = $1 FOR UPDATE`,
-      [id]
+      `SELECT id FROM room_categories WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+      [id, scope.tenantId]
     );
     if (existing.rowCount === 0) {
       throw new RoomDbError('CATEGORY_NOT_FOUND', 'This category no longer exists.');
     }
 
     const inUse = await client.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM rooms WHERE category_id = $1`,
-      [id]
+      `SELECT count(*)::text AS count FROM rooms WHERE category_id = $1 AND tenant_id = $2`,
+      [id, scope.tenantId]
     );
     if (Number(inUse.rows[0]?.count ?? 0) > 0) {
       throw new RoomDbError(
@@ -401,6 +448,9 @@ export async function deleteCategory(id: string): Promise<void> {
       );
     }
 
-    await client.query(`DELETE FROM room_categories WHERE id = $1`, [id]);
+    await client.query('DELETE FROM room_categories WHERE id = $1 AND tenant_id = $2', [
+      id,
+      scope.tenantId,
+    ]);
   });
 }

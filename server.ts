@@ -17,6 +17,25 @@ import { isDatabaseConfigured } from './server/db/pool';
 import { createRoomsRouter } from './server/routes/rooms';
 import { createRoomCategoriesRouter } from './server/routes/roomCategories';
 import { createRoomImportRouter } from './server/routes/roomImport';
+import { attachAuth } from './server/middleware/auth';
+import { createAuthRouter } from './server/routes/auth';
+import { createPlatformRouter } from './server/routes/platform';
+import { createBusinessRouter } from './server/routes/business';
+import { createBranchesRouter } from './server/routes/branches';
+import { createGuestsRouter } from './server/routes/guests';
+import { createReservationsRouter } from './server/routes/reservations';
+import {
+  createCheckInRouter,
+  createCheckOutRouter,
+  createFrontOfficeRouter,
+} from './server/routes/frontOffice';
+import { createHousekeepingRouter } from './server/routes/housekeeping';
+import { createFinanceRouter } from './server/routes/finance';
+import { createStaffRouter } from './server/routes/staff';
+import { createReportsRouter } from './server/routes/reports';
+import { createCctvRouter } from './server/routes/cctv';
+import { createAuditRouter } from './server/routes/audit';
+import { createOccupancyRouter } from './server/routes/occupancy';
 
 const PORT = 3000;
 const GEMINI_FREE_TIER_MODEL = 'gemini-3.1-flash-lite';
@@ -673,7 +692,31 @@ async function startServer() {
   app.use('/api/room-import', express.json({ limit: '2mb' }));
   app.use(express.json({ limit: '15mb' }));
 
-  // GATE 2.0 — room inventory (PostgreSQL-backed)
+  // Every API request resolves an optional session; each router then enforces
+  // its own authentication, permissions and tenant scope.
+  app.use('/api', attachAuth);
+
+  // ---------------------------------------------------------------------------
+  // Lodge Management ERP API
+  // ---------------------------------------------------------------------------
+  app.use('/api/auth', createAuthRouter());
+  app.use('/api/platform', createPlatformRouter());
+  app.use('/api/business', createBusinessRouter());
+  app.use('/api/branches', createBranchesRouter());
+  app.use('/api/guests', createGuestsRouter());
+  app.use('/api/reservations', createReservationsRouter());
+  app.use('/api/front-office', createFrontOfficeRouter());
+  app.use('/api/check-in', createCheckInRouter());
+  app.use('/api/check-out', createCheckOutRouter());
+  app.use('/api/housekeeping', createHousekeepingRouter());
+  app.use('/api/finance', createFinanceRouter());
+  app.use('/api/staff', createStaffRouter());
+  app.use('/api/reports', createReportsRouter());
+  app.use('/api/cctv', createCctvRouter());
+  app.use('/api/occupancy', createOccupancyRouter());
+  app.use('/api/audit-logs', createAuditRouter());
+
+  // GATE 2.0 — room inventory (PostgreSQL-backed, tenant-scoped)
   app.use('/api/rooms', createRoomsRouter());
   app.use('/api/room-categories', createRoomCategoriesRouter());
   app.use('/api/room-import', createRoomImportRouter());
@@ -686,7 +729,7 @@ async function startServer() {
     res.json({
       status: 'ok',
       application: 'ENKAI LODGEFLOW',
-      phase: 'Phase 2 — Gate 2.0: Room server migration',
+      phase: 'Phase 3 — Multi-tenant Lodge Management ERP',
       gemini_configured: hasKey,
       database_configured: isDatabaseConfigured(),
       model: GEMINI_FREE_TIER_MODEL,

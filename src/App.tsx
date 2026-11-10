@@ -271,8 +271,8 @@ const INITIAL_CAMERAS: RegisteredCameraInfo[] = [
   },
 ];
 
-export default function App() {
-  const [activeRoute, setActiveRoute] = useState<AppRouteId>('dashboard');
+export default function App({ initialRoute = 'dashboard' }: { initialRoute?: AppRouteId } = {}) {
+  const [activeRoute, setActiveRoute] = useState<AppRouteId>(initialRoute);
   const [health, setHealth] = useState<ServerHealthInfo | null>(null);
 
   // Branch & operator context

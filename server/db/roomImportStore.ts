@@ -149,22 +149,25 @@ function sameRoom(existing: RoomDbRow, next: ValidRoomInput): boolean {
   );
 }
 
-async function loadDatabaseState(client: PoolClient): Promise<{
+async function loadDatabaseState(client: PoolClient, tenantId: string): Promise<{
   categories: CategoryDbRow[];
   rooms: RoomDbRow[];
 }> {
   const categories = await client.query<CategoryDbRow>(
-    `SELECT id, name, description FROM room_categories`
+    `SELECT id, name, description FROM room_categories WHERE tenant_id = $1`,
+    [tenantId]
   );
   const rooms = await client.query<RoomDbRow>(
     `SELECT id, room_number, name, category_id, floor, capacity, status, description,
             hourly_rate, daily_rate, overnight_rate, archived_at
-       FROM rooms`
+       FROM rooms
+      WHERE tenant_id = $1`,
+    [tenantId]
   );
   return { categories: categories.rows, rooms: rooms.rows };
 }
 
-async function analyze(client: PoolClient, raw: unknown): Promise<Analysis> {
+async function analyze(client: PoolClient, raw: unknown, tenantId: string): Promise<Analysis> {
   const payload = asRecord(raw);
   if (!payload) {
     throw new RoomDbError('IMPORT_INVALID_PAYLOAD', 'Import payload must be an object.');
@@ -190,7 +193,7 @@ async function analyze(client: PoolClient, raw: unknown): Promise<Analysis> {
     throw new RoomDbError('IMPORT_INVALID_PAYLOAD', 'Import payload is too large.');
   }
 
-  const db = await loadDatabaseState(client);
+  const db = await loadDatabaseState(client, tenantId);
   const dbCategoryById = new Map(db.categories.map((row) => [row.id, row]));
   const dbCategoryByName = new Map(
     db.categories.map((row) => [row.name.trim().toLowerCase(), row])
@@ -442,10 +445,13 @@ function publicPreview(analysis: Analysis): ImportPreview {
   };
 }
 
-export async function previewRoomImport(raw: unknown): Promise<ImportPreview> {
+export async function previewRoomImport(
+  raw: unknown,
+  scope: { tenantId: string }
+): Promise<ImportPreview> {
   const client = await getPool().connect();
   try {
-    return publicPreview(await analyze(client, raw));
+    return publicPreview(await analyze(client, raw, scope.tenantId));
   } finally {
     client.release();
   }
@@ -462,13 +468,29 @@ export interface ImportCommitResult {
   issues: ImportIssue[];
 }
 
-export async function commitRoomImport(raw: unknown): Promise<ImportCommitResult> {
+export async function commitRoomImport(
+  raw: unknown,
+  scope: { tenantId: string; branchId: string | null }
+): Promise<ImportCommitResult> {
   return withTransaction(async (client) => {
-    const analysis = await analyze(client, raw);
+    const analysis = await analyze(client, raw, scope.tenantId);
+
+    const branch = scope.branchId
+      ? { id: scope.branchId }
+      : (
+          await client.query<{ id: string }>(
+            `SELECT id FROM branches WHERE tenant_id = $1
+              ORDER BY is_default DESC, created_at ASC LIMIT 1`,
+            [scope.tenantId]
+          )
+        ).rows[0];
+    if (!branch) {
+      throw new RoomDbError('INVALID_ROOM_DATA', 'Create a branch before importing rooms.');
+    }
 
     const previous = await client.query<{ created_at: Date }>(
-      `SELECT created_at FROM room_import_runs WHERE payload_hash = $1`,
-      [analysis.hash]
+      `SELECT created_at FROM room_import_runs WHERE payload_hash = $1 AND tenant_id = $2`,
+      [analysis.hash, scope.tenantId]
     );
     if (previous.rowCount && previous.rowCount > 0) {
       throw new RoomDbError(
@@ -482,10 +504,10 @@ export async function commitRoomImport(raw: unknown): Promise<ImportCommitResult
     let importedCategories = 0;
     for (const category of analysis.importableCategories) {
       const result = await client.query(
-        `INSERT INTO room_categories (id, name, description, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO room_categories (id, tenant_id, branch_id, name, description, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT DO NOTHING`,
-        [category.id, category.name, category.description, category.createdAt, category.updatedAt]
+        [category.id, scope.tenantId, branch.id, category.name, category.description, category.createdAt, category.updatedAt]
       );
       importedCategories += result.rowCount ?? 0;
     }
@@ -494,15 +516,17 @@ export async function commitRoomImport(raw: unknown): Promise<ImportCommitResult
     for (const room of analysis.importableRooms) {
       const result = await client.query(
         `INSERT INTO rooms (
-           id, room_number, name, category_id, floor, capacity, status, description,
-           hourly_rate, daily_rate, overnight_rate, currency, pricing_updated_at,
-           created_at, updated_at
+           id, tenant_id, branch_id, room_number, name, category_id, floor, capacity,
+           status, description, hourly_rate, daily_rate, overnight_rate, currency,
+           pricing_updated_at, created_at, updated_at
          )
-         SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'TZS',$12,$13,$14
-          WHERE EXISTS (SELECT 1 FROM room_categories WHERE id = $4)
+         SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'TZS',$14,$15,$16
+          WHERE EXISTS (SELECT 1 FROM room_categories WHERE id = $6 AND tenant_id = $2)
          ON CONFLICT DO NOTHING`,
         [
           room.id,
+          scope.tenantId,
+          branch.id,
           room.roomNumber,
           room.name,
           room.categoryId,
@@ -533,9 +557,9 @@ export async function commitRoomImport(raw: unknown): Promise<ImportCommitResult
     };
 
     await client.query(
-      `INSERT INTO room_import_runs (id, payload_hash, summary)
-       VALUES ($1, $2, $3::jsonb)`,
-      [summary.runId, analysis.hash, JSON.stringify(summary)]
+      `INSERT INTO room_import_runs (id, tenant_id, payload_hash, summary)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [summary.runId, scope.tenantId, analysis.hash, JSON.stringify(summary)]
     );
 
     return summary;

@@ -85,7 +85,7 @@ export async function requestApi<T>(
     response = await fetch(path, {
       ...init,
       headers: requestHeaders,
-      credentials: 'same-origin',
+      credentials: 'include',
     });
   } catch {
     throw new RoomRepositoryError(

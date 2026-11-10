@@ -12,7 +12,9 @@
     "lint": "tsc --noEmit",
     "test:rooms": "tsx scripts/room-foundation.test.ts",
     "test:rooms:api": "tsx scripts/room-api.test.ts",
-    "db:migrate": "tsx scripts/migrate.ts"
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:bootstrap": "tsx scripts/bootstrap.ts",
+    "test:erp:api": "tsx scripts/erp-api.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.32.0",

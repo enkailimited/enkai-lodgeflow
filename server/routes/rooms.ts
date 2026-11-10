@@ -1,18 +1,18 @@
 /**
- * ENKAI LODGEFLOW — GATE 2.0
- * Room endpoints.
+ * Room endpoints (tenant-scoped).
  *
  *   GET    /api/rooms
  *   GET    /api/rooms/:id
  *   POST   /api/rooms
  *   PATCH  /api/rooms/:id        (full room body, or { status } only)
- *   DELETE /api/rooms/:id        (admin token)
+ *   DELETE /api/rooms/:id        (room.delete permission)
  */
 
 import express, { Router } from 'express';
-import { getRoom, createRoom, deleteRoom, listRooms, updateRoom, updateRoomStatus } from '../db/roomStore';
+import { createRoom, deleteRoom, getRoom, listRooms, updateRoom, updateRoomStatus } from '../db/roomStore';
+import { recordAudit } from '../db/auditStore';
 import { asyncRoute, roomErrorHandler, sendCreated, sendData, sendError } from '../http/respond';
-import { requireAdminToken } from '../middleware/adminToken';
+import { getScope, requireAuth, requirePermission, resolveTenantScope } from '../middleware/auth';
 import { validateRoomInput, validateRoomStatus } from '../validation/rooms';
 
 function sendValidationError(
@@ -27,81 +27,115 @@ function sendValidationError(
 export function createRoomsRouter(): Router {
   const router = Router();
   router.use(express.json({ limit: '64kb' }));
+  router.use(requireAuth, resolveTenantScope);
 
   router.get(
     '/',
-    asyncRoute(async (_req, res) => {
-      const rooms = await listRooms();
+    requirePermission('room.read'),
+    asyncRoute(async (req, res) => {
+      const rooms = await listRooms(getScope(req));
       sendData(res, { rooms }, { count: rooms.length });
     })
   );
 
   router.get(
     '/:id',
+    requirePermission('room.read'),
     asyncRoute(async (req, res) => {
-      const room = await getRoom(req.params.id);
+      const room = await getRoom(getScope(req), req.params.id);
       sendData(res, { room });
     })
   );
 
   router.post(
     '/',
+    requirePermission('room.write'),
     asyncRoute(async (req, res) => {
       const validation = validateRoomInput(req.body);
       if (!validation.value) {
         sendValidationError(res, validation.fieldErrors);
         return;
       }
-      const room = await createRoom(validation.value);
+      const scope = getScope(req);
+      const room = await createRoom(scope, validation.value);
+      await recordAudit({
+        tenantId: scope.tenantId,
+        branchId: scope.branchId,
+        actorUserId: scope.user.id,
+        actorEmail: scope.user.email,
+        action: 'room.created',
+        entityType: 'room',
+        entityId: room.id,
+        metadata: { roomNumber: room.roomNumber },
+        ip: req.ip,
+      });
       sendCreated(res, { room });
     })
   );
 
   router.patch(
     '/:id',
+    requirePermission('room.write'),
     asyncRoute(async (req, res) => {
+      const scope = getScope(req);
       const body = (req.body ?? {}) as Record<string, unknown>;
-      const keys = Object.keys(body);
 
-      if (keys.length === 1 && keys[0] === 'status') {
+      // Status-only operational update (Phase 1 behaviour preserved).
+      if (Object.keys(body).length === 1 && 'status' in body) {
         const status = validateRoomStatus(body.status);
         if (!status) {
-          sendValidationError(res, { status: 'Unknown room status.' });
+          sendValidationError(res, { status: 'Select a valid room status.' });
           return;
         }
-        const room = await updateRoomStatus(req.params.id, status);
+        const room = await updateRoomStatus(scope, req.params.id, status);
+        await recordAudit({
+          tenantId: scope.tenantId,
+          actorUserId: scope.user.id,
+          actorEmail: scope.user.email,
+          action: 'room.status_changed',
+          entityType: 'room',
+          entityId: room.id,
+          metadata: { status },
+          ip: req.ip,
+        });
         sendData(res, { room });
         return;
       }
 
-      const existing = await getRoom(req.params.id);
-      const merged = {
-        roomNumber: body.roomNumber ?? existing.roomNumber,
-        name: body.name !== undefined ? body.name : existing.name,
-        categoryId: body.categoryId ?? existing.categoryId,
-        floor: body.floor ?? existing.floor,
-        capacity: body.capacity ?? existing.capacity,
-        status: body.status ?? existing.status,
-        description: body.description !== undefined ? body.description : existing.description,
-        pricing: body.pricing ?? existing.pricing,
-      };
-
-      const validation = validateRoomInput(merged);
+      const validation = validateRoomInput(body);
       if (!validation.value) {
         sendValidationError(res, validation.fieldErrors);
         return;
       }
-
-      const room = await updateRoom(req.params.id, validation.value);
+      const room = await updateRoom(scope, req.params.id, validation.value);
+      await recordAudit({
+        tenantId: scope.tenantId,
+        actorUserId: scope.user.id,
+        actorEmail: scope.user.email,
+        action: 'room.updated',
+        entityType: 'room',
+        entityId: room.id,
+        ip: req.ip,
+      });
       sendData(res, { room });
     })
   );
 
   router.delete(
     '/:id',
-    requireAdminToken,
+    requirePermission('room.delete'),
     asyncRoute(async (req, res) => {
-      await deleteRoom(req.params.id);
+      const scope = getScope(req);
+      await deleteRoom(scope, req.params.id);
+      await recordAudit({
+        tenantId: scope.tenantId,
+        actorUserId: scope.user.id,
+        actorEmail: scope.user.email,
+        action: 'room.archived',
+        entityType: 'room',
+        entityId: req.params.id,
+        ip: req.ip,
+      });
       res.status(204).end();
     })
   );
